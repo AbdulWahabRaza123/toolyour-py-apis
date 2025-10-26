@@ -31,12 +31,14 @@ class DocumentConverterService:
 
     def __init__(self):
         self.supported_conversions = {
-            # Core document formats only (no HTML, ODT - they belong in Web/Office modules)
-            'docx': ['pdf', 'txt', 'rtf'],
-            'pdf': ['txt', 'docx', 'rtf'],
-            'txt': ['pdf', 'docx', 'rtf', 'md'],
-            'rtf': ['pdf', 'docx', 'txt'],
-            'md': ['pdf', 'docx', 'txt']
+            # Core document formats only
+            'docx': ['pdf', 'txt', 'html', 'rtf', 'odt'],
+            'pdf': ['txt', 'docx', 'html', 'rtf'],
+            'txt': ['pdf', 'docx', 'html', 'rtf', 'md'],
+            'html': ['pdf', 'docx', 'txt', 'md'],
+            'rtf': ['pdf', 'docx', 'txt', 'html'],
+            'odt': ['pdf', 'docx', 'txt', 'html'],
+            'md': ['pdf', 'docx', 'txt', 'html']
         }
 
     def can_convert(self, source_format: str, target_format: str) -> bool:
