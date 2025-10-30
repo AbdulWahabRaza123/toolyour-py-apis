@@ -28,6 +28,16 @@ router.add_api_route(
     tags=["Document Conversion"]
 )
 
+# DOCX to RTF conversion
+router.add_api_route(
+    "/docx-to-rtf",
+    controller.convert_docx_to_rtf,
+    methods=["POST"],
+    summary="Convert DOCX to RTF",
+    description="Upload a DOCX file and convert it to RTF format",
+    tags=["Document Conversion"]
+)
+
 # TXT to PDF conversion
 router.add_api_route(
     "/txt-to-pdf",
@@ -68,6 +78,46 @@ router.add_api_route(
     tags=["Document Conversion"]
 )
 
+# TXT to RTF conversion
+router.add_api_route(
+    "/txt-to-rtf",
+    controller.convert_txt_to_rtf,
+    methods=["POST"],
+    summary="Convert TXT to RTF",
+    description="Upload a text file and convert it to RTF format",
+    tags=["Document Conversion"]
+)
+
+# TXT to MD conversion
+router.add_api_route(
+    "/txt-to-md",
+    controller.convert_txt_to_md,
+    methods=["POST"],
+    summary="Convert TXT to MD",
+    description="Upload a text file and convert it to Markdown format",
+    tags=["Document Conversion"]
+)
+
+# RTF to PDF conversion
+router.add_api_route(
+    "/rtf-to-pdf",
+    controller.convert_rtf_to_pdf,
+    methods=["POST"],
+    summary="Convert RTF to PDF",
+    description="Upload an RTF file and convert it to PDF format",
+    tags=["Document Conversion"]
+)
+
+# RTF to DOCX conversion
+router.add_api_route(
+    "/rtf-to-docx",
+    controller.convert_rtf_to_docx,
+    methods=["POST"],
+    summary="Convert RTF to DOCX",
+    description="Upload an RTF file and convert it to DOCX format",
+    tags=["Document Conversion"]
+)
+
 # PDF to DOCX conversion
 router.add_api_route(
     "/pdf-to-docx",
@@ -75,6 +125,16 @@ router.add_api_route(
     methods=["POST"],
     summary="Convert PDF to DOCX",
     description="Upload a PDF file and convert it to DOCX format",
+    tags=["Document Conversion"]
+)
+
+# PDF to RTF conversion
+router.add_api_route(
+    "/pdf-to-rtf",
+    controller.convert_pdf_to_rtf,
+    methods=["POST"],
+    summary="Convert PDF to RTF",
+    description="Upload a PDF file and convert it to RTF format",
     tags=["Document Conversion"]
 )
 
@@ -171,6 +231,16 @@ router.add_api_route(
     tags=["Document Conversion"]
 )
 
+# RTF to TXT conversion
+router.add_api_route(
+    "/rtf-to-txt",
+    controller.convert_rtf_to_txt,
+    methods=["POST"],
+    summary="Convert RTF to TXT",
+    description="Upload an RTF file and convert it to plain text",
+    tags=["Document Conversion"]
+)
+
 # Get supported conversions
 router.add_api_route(
     "/supported-conversions",
@@ -178,6 +248,16 @@ router.add_api_route(
     methods=["GET"],
     summary="Get supported conversions",
     description="Get list of all supported document format conversions",
+    tags=["Document Conversion"]
+)
+
+# Batch conversion (files/zip/rar/urls) -> target format, returns ZIP
+router.add_api_route(
+    "/batch-convert",
+    controller.batch_convert_documents,
+    methods=["POST"],
+    summary="Batch convert documents",
+    description="Upload multiple files or a ZIP/RAR or provide URLs and convert to target format. Returns a ZIP of results.",
     tags=["Document Conversion"]
 )
 

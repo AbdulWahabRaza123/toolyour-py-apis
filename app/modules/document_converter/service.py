@@ -6,7 +6,8 @@ Handles core document formats: DOCX, PDF, TXT, HTML, RTF, ODT, MD.
 import io
 import os
 import tempfile
-from typing import Optional
+import zipfile
+from typing import Optional, List, Tuple
 from docx import Document
 from reportlab.lib.pagesizes import A4, letter, legal
 from reportlab.lib.units import mm
@@ -15,6 +16,9 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
 import PyPDF2
 import structlog
+import httpx
+import rarfile
+import pypandoc
 
 # Additional formats
 import markdown
@@ -67,6 +71,86 @@ class DocumentConverterService:
         text = text.replace('\r\n', '\n')  # Normalize line endings
         text = text.replace('\r', '\n')  # Normalize line endings
         return text
+
+    async def extract_archive(self, filename: str, data: bytes) -> List[Tuple[str, bytes]]:
+        """Extract zip/rar in-memory and return list of (filename, bytes)."""
+        name = filename.lower()
+        results: List[Tuple[str, bytes]] = []
+        try:
+            if name.endswith('.zip'):
+                with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                    for info in zf.infolist():
+                        if info.is_dir():
+                            continue
+                        with zf.open(info) as f:
+                            results.append((info.filename, f.read()))
+                return results
+            if name.endswith('.rar'):
+                # rarfile typically requires unrar/bsdtar installed; handle gracefully
+                with rarfile.RarFile(io.BytesIO(data)) as rf:
+                    for info in rf.infolist():
+                        if info.is_dir():
+                            continue
+                        with rf.open(info) as f:
+                            results.append((info.filename, f.read()))
+                return results
+            raise ValueError('Unsupported archive format. Use .zip or .rar')
+        except Exception as e:
+            logger.error("Archive extraction failed", error=str(e))
+            raise
+
+    async def download_urls(self, urls: List[str]) -> List[Tuple[str, bytes]]:
+        """Download URLs and return list of (filename, bytes)."""
+        results: List[Tuple[str, bytes]] = []
+        async with httpx.AsyncClient(timeout=30) as client:
+            for url in urls:
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    # derive filename
+                    fname = url.split('/')[-1] or 'downloaded'
+                    results.append((fname, resp.content))
+                except Exception as e:
+                    logger.error("URL download failed", url=url, error=str(e))
+        return results
+
+    async def batch_convert(self, items: List[Tuple[str, bytes]], target_format: str, source_format: Optional[str] = None, allowed_sources: Optional[List[str]] = None) -> ServiceResponse:
+        """Convert each item to target_format and return a zip of results with manifest."""
+        try:
+            target = target_format.lower().replace('.', '')
+            out_zip = io.BytesIO()
+            manifest = []
+            with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for fname, content in items:
+                    src = (source_format or os.path.splitext(fname)[1][1:] or '').lower()
+                    if allowed_sources is not None and src not in allowed_sources:
+                        manifest.append({"file": fname, "status": 400, "message": f"Source '{src}' not allowed for this endpoint"})
+                        continue
+                    if not src:
+                        manifest.append({"file": fname, "status": 400, "message": "Cannot infer source format"})
+                        continue
+                    method_name = f"convert_{src}_to_{target}"
+                    func = getattr(self, method_name, None)
+                    if func is None:
+                        manifest.append({"file": fname, "status": 400, "message": f"Unsupported {src} -> {target}"})
+                        continue
+                    try:
+                        res: ServiceResponse = await func(content) if func.__code__.co_argcount == 2 else await func(content, None)
+                        if res.status == 200 and res.data:
+                            base = os.path.splitext(os.path.basename(fname))[0]
+                            out_name = f"{base}.{target}"
+                            zf.writestr(out_name, res.data)
+                            manifest.append({"file": fname, "status": 200, "output": out_name})
+                        else:
+                            manifest.append({"file": fname, "status": res.status, "message": res.message})
+                    except Exception as e:
+                        manifest.append({"file": fname, "status": 500, "message": str(e)})
+                # add manifest
+                zf.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+            return ServiceResponse(status=200, message="Batch conversion completed", data=out_zip.getvalue(), format="zip")
+        except Exception as e:
+            logger.error("Batch conversion failed", error=str(e))
+            return ServiceResponse(status=500, message="Error performing batch conversion", error=str(e))
 
     # DOCX conversions
     async def convert_docx_to_pdf(
