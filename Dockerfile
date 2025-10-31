@@ -18,6 +18,11 @@ RUN apt-get update \
     ffmpeg \
     libavcodec-extra \
     pandoc \
+    libreoffice \
+    libreoffice-writer \
+    libreoffice-calc \
+    libreoffice-impress \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching

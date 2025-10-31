@@ -18,6 +18,8 @@ import PyPDF2
 import structlog
 import httpx
 import rarfile
+import subprocess
+import shutil
 import pypandoc
 
 # Additional formats
@@ -71,6 +73,49 @@ class DocumentConverterService:
         text = text.replace('\r\n', '\n')  # Normalize line endings
         text = text.replace('\r', '\n')  # Normalize line endings
         return text
+
+    def _which(self, cmd: str) -> bool:
+        return shutil.which(cmd) is not None
+
+    def _run(self, args: list, cwd: Optional[str] = None) -> None:
+        completed = subprocess.run(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if completed.returncode != 0:
+            stderr = completed.stderr.decode('utf-8', 'ignore')
+            cmd = ' '.join(args)
+            raise RuntimeError(f"Command failed: {cmd}\n{stderr}")
+
+    def _convert_with_soffice(self, input_bytes: bytes, input_name: str, out_ext: str) -> bytes:
+        if not self._which('soffice') and not self._which('libreoffice'):
+            raise RuntimeError('LibreOffice (soffice) not found in PATH')
+        with tempfile.TemporaryDirectory() as tmp:
+            in_path = os.path.join(tmp, input_name)
+            with open(in_path, 'wb') as f:
+                f.write(input_bytes)
+            outdir = tmp
+            soffice_bin = shutil.which('soffice') or shutil.which('libreoffice')
+            self._run([soffice_bin, '--headless', '--convert-to', out_ext, '--outdir', outdir, in_path])
+            base = os.path.splitext(os.path.basename(input_name))[0]
+            out_path = os.path.join(outdir, f"{base}.{out_ext}")
+            # LibreOffice may output slightly different extension casing; search
+            if not os.path.exists(out_path):
+                for fn in os.listdir(outdir):
+                    if fn.startswith(base + '.') and fn.lower().endswith('.' + out_ext.lower()):
+                        out_path = os.path.join(outdir, fn)
+                        break
+            with open(out_path, 'rb') as f:
+                return f.read()
+
+    def _convert_with_pandoc(self, input_bytes: bytes, from_ext: str, to_ext: str) -> bytes:
+        if not self._which('pandoc'):
+            raise RuntimeError('pandoc not found in PATH')
+        with tempfile.TemporaryDirectory() as tmp:
+            in_path = os.path.join(tmp, f"input.{from_ext}")
+            out_path = os.path.join(tmp, f"output.{to_ext}")
+            with open(in_path, 'wb') as f:
+                f.write(input_bytes)
+            self._run(['pandoc', in_path, '-o', out_path])
+            with open(out_path, 'rb') as f:
+                return f.read()
 
     async def extract_archive(self, filename: str, data: bytes) -> List[Tuple[str, bytes]]:
         """Extract zip/rar in-memory and return list of (filename, bytes)."""
@@ -158,55 +203,10 @@ class DocumentConverterService:
         file_buffer: bytes,
         options: Optional[ConversionOptions] = None
     ) -> ServiceResponse:
-        """Convert DOCX to PDF."""
+        """Convert DOCX to PDF with LibreOffice for high fidelity."""
         try:
-            if options is None:
-                options = ConversionOptions()
-
-            # Load DOCX document
-            doc = Document(io.BytesIO(file_buffer))
-            
-            # Create PDF
-            pdf_buffer = io.BytesIO()
-            page_size = self._get_page_size(options.page_size)
-            if options.orientation == "landscape":
-                page_size = (page_size[1], page_size[0])
-
-            pdf_doc = SimpleDocTemplate(
-                pdf_buffer,
-                pagesize=page_size,
-                rightMargin=options.margin * mm,
-                leftMargin=options.margin * mm,
-                topMargin=options.margin * mm,
-                bottomMargin=options.margin * mm,
-            )
-
-            styles = getSampleStyleSheet()
-            story = []
-
-            for paragraph in doc.paragraphs:
-                if paragraph.text.strip():
-                    # Determine style based on paragraph style
-                    if paragraph.style.name.startswith('Heading'):
-                        level = int(paragraph.style.name.split()[-1]) if paragraph.style.name.split()[-1].isdigit() else 1
-                        style = ParagraphStyle(
-                            'CustomHeading',
-                            parent=styles['Heading1'],
-                            fontSize=18 - (level - 1) * 2,
-                            spaceAfter=12,
-                        )
-                    else:
-                        style = styles['Normal']
-                    
-                    p = Paragraph(self._clean_text(paragraph.text), style)
-                    story.append(p)
-                    story.append(Spacer(1, 6))
-
-            pdf_doc.build(story)
-            pdf_content = pdf_buffer.getvalue()
-            pdf_buffer.close()
-
-            logger.info("DOCX to PDF conversion completed")
+            pdf_content = self._convert_with_soffice(file_buffer, 'input.docx', 'pdf')
+            logger.info("DOCX to PDF (LibreOffice) conversion completed")
             return ServiceResponse(
                 status=200,
                 message="DOCX converted to PDF successfully",
@@ -259,26 +259,11 @@ class DocumentConverterService:
         self,
         file_buffer: bytes
     ) -> ServiceResponse:
-        """Convert DOCX to HTML."""
+        """Convert DOCX to HTML using pandoc to preserve structure/images."""
         try:
-            # Load DOCX document
-            doc = Document(io.BytesIO(file_buffer))
-            
-            # Create HTML
-            html_content = ['<html><head><title>Converted Document</title></head><body>']
-            
-            for paragraph in doc.paragraphs:
-                if paragraph.text.strip():
-                    if paragraph.style.name.startswith('Heading'):
-                        level = int(paragraph.style.name.split()[-1]) if paragraph.style.name.split()[-1].isdigit() else 1
-                        html_content.append(f'<h{level}>{paragraph.text}</h{level}>')
-                    else:
-                        html_content.append(f'<p>{paragraph.text}</p>')
-            
-            html_content.append('</body></html>')
-            html_text = '\n'.join(html_content)
-
-            logger.info("DOCX to HTML conversion completed")
+            html_bytes = self._convert_with_pandoc(file_buffer, 'docx', 'html')
+            html_text = html_bytes.decode('utf-8', 'ignore')
+            logger.info("DOCX to HTML (pandoc) conversion completed")
             return ServiceResponse(
                 status=200,
                 message="DOCX converted to HTML successfully",
@@ -393,26 +378,19 @@ class DocumentConverterService:
         self,
         file_buffer: bytes
     ) -> ServiceResponse:
-        """Convert PDF to DOCX."""
+        """Convert PDF to DOCX using pdf2docx to retain layout/images (best-effort)."""
         try:
-            # Read PDF
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_buffer))
-            text_content = []
-            
-            for page in pdf_reader.pages:
-                text_content.append(page.extract_text())
-            
-            # Create DOCX document
-            doc = Document()
-            for text in text_content:
-                if text.strip():
-                    doc.add_paragraph(text)
-            
-            # Save to bytes
-            docx_buffer = io.BytesIO()
-            doc.save(docx_buffer)
-            docx_content = docx_buffer.getvalue()
-            docx_buffer.close()
+            from pdf2docx import Converter  # imported lazily to avoid overhead
+            with tempfile.TemporaryDirectory() as tmp:
+                in_path = os.path.join(tmp, 'input.pdf')
+                out_path = os.path.join(tmp, 'output.docx')
+                with open(in_path, 'wb') as f:
+                    f.write(file_buffer)
+                cv = Converter(in_path)
+                cv.convert(out_path, start=0, end=None)
+                cv.close()
+                with open(out_path, 'rb') as f:
+                    docx_content = f.read()
 
             logger.info("PDF to DOCX conversion completed")
             return ServiceResponse(
@@ -881,106 +859,27 @@ class DocumentConverterService:
         file_buffer: bytes,
         options: Optional[ConversionOptions] = None
     ) -> ServiceResponse:
-        """Convert RTF to PDF."""
+        """Convert RTF to PDF (pandoc)."""
         try:
-            if options is None:
-                options = ConversionOptions()
-
-            # Read RTF content
-            rtf_content = file_buffer.decode('utf-8')
-            
-            # Strip RTF formatting (basic implementation)
-            text_content = rtf_content.replace('\\par', '\n')
-            text_content = text_content.replace('\\b', '')
-            text_content = text_content.replace('\\i', '')
-            text_content = text_content.replace('\\u', '')
-            
-            # Create PDF
-            pdf_buffer = io.BytesIO()
-            page_size = self._get_page_size(options.page_size)
-            if options.orientation == "landscape":
-                page_size = (page_size[1], page_size[0])
-
-            pdf_doc = SimpleDocTemplate(
-                pdf_buffer,
-                pagesize=page_size,
-                rightMargin=options.margin * mm,
-                leftMargin=options.margin * mm,
-                topMargin=options.margin * mm,
-                bottomMargin=options.margin * mm,
-            )
-
-            styles = getSampleStyleSheet()
-            story = []
-
-            for line in text_content.split('\n'):
-                if line.strip():
-                    p = Paragraph(self._clean_text(line), styles['Normal'])
-                    story.append(p)
-                    story.append(Spacer(1, 6))
-
-            pdf_doc.build(story)
-            pdf_content = pdf_buffer.getvalue()
-            pdf_buffer.close()
-
-            logger.info("RTF to PDF conversion completed")
-            return ServiceResponse(
-                status=200,
-                message="RTF converted to PDF successfully",
-                data=pdf_content,
-                format="pdf"
-            )
-
+            pdf_bytes = self._convert_with_pandoc(file_buffer, 'rtf', 'pdf')
+            logger.info("RTF to PDF (pandoc) conversion completed")
+            return ServiceResponse(status=200, message="RTF converted to PDF successfully", data=pdf_bytes, format="pdf")
         except Exception as e:
             logger.error("RTF to PDF conversion failed", error=str(e))
-            return ServiceResponse(
-                status=500,
-                message="Error converting RTF to PDF",
-                error=str(e)
-            )
+            return ServiceResponse(status=500, message="Error converting RTF to PDF", error=str(e))
 
     async def convert_rtf_to_docx(
         self,
         file_buffer: bytes
     ) -> ServiceResponse:
-        """Convert RTF to DOCX."""
+        """Convert RTF to DOCX (pandoc)."""
         try:
-            # Read RTF content
-            rtf_content = file_buffer.decode('utf-8')
-            
-            # Strip RTF formatting (basic implementation)
-            text_content = rtf_content.replace('\\par', '\n')
-            text_content = text_content.replace('\\b', '')
-            text_content = text_content.replace('\\i', '')
-            text_content = text_content.replace('\\u', '')
-            
-            # Create DOCX document
-            doc = Document()
-            for line in text_content.split('\n'):
-                if line.strip():
-                    doc.add_paragraph(line)
-
-            # Save to bytes
-            docx_buffer = io.BytesIO()
-            doc.save(docx_buffer)
-            docx_content = docx_buffer.getvalue()
-            docx_buffer.close()
-
-            logger.info("RTF to DOCX conversion completed")
-            return ServiceResponse(
-                status=200,
-                message="RTF converted to DOCX successfully",
-                data=docx_content,
-                format="docx"
-            )
-
+            docx_bytes = self._convert_with_pandoc(file_buffer, 'rtf', 'docx')
+            logger.info("RTF to DOCX (pandoc) conversion completed")
+            return ServiceResponse(status=200, message="RTF converted to DOCX successfully", data=docx_bytes, format="docx")
         except Exception as e:
             logger.error("RTF to DOCX conversion failed", error=str(e))
-            return ServiceResponse(
-                status=500,
-                message="Error converting RTF to DOCX",
-                error=str(e)
-            )
+            return ServiceResponse(status=500, message="Error converting RTF to DOCX", error=str(e))
 
     async def convert_rtf_to_txt(
         self,

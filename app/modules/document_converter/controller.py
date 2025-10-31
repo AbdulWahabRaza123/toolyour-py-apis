@@ -82,7 +82,10 @@ async def convert_docx_to_pdf(
 
 
 async def convert_docx_to_txt(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None),
 ) -> Response:
     """
     Convert DOCX file to plain text.
@@ -94,35 +97,36 @@ async def convert_docx_to_txt(
         Text file as response
     """
     try:
-        # Validate file type
-        if not file.filename.lower().endswith('.docx'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .docx files are supported"
-            )
+        # Batch
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            result = await document_converter_service.batch_convert(items, target_format="txt", allowed_sources=["docx"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_docx_to_txt.zip"})
 
-        # Read file content
+        # Single
+        if file is None or not file.filename.lower().endswith('.docx'):
+            raise HTTPException(status_code=400, detail="Provide a .docx file or use files/archive/urls for batch")
         file_content = await file.read()
-
-        # Convert document
         result = await document_converter_service.convert_docx_to_txt(file_content)
-
         if result.status != 200:
-            raise HTTPException(
-                status_code=result.status,
-                detail=result.message
-            )
-
-        # Return text file
+            raise HTTPException(status_code=result.status, detail=result.message)
         filename = file.filename.rsplit('.', 1)[0] + '.txt'
-        
-        return Response(
-            content=result.data,
-            media_type="text/plain",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
-        )
+        return Response(content=result.data, media_type="text/plain", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -135,30 +139,43 @@ async def convert_docx_to_txt(
 
 
 async def convert_docx_to_rtf(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None),
 ) -> Response:
     """
     Convert DOCX file to RTF.
     """
     try:
-        if not file.filename.lower().endswith('.docx'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .docx files are supported"
-            )
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            result = await document_converter_service.batch_convert(items, target_format="rtf", allowed_sources=["docx"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_docx_to_rtf.zip"})
 
+        if file is None or not file.filename.lower().endswith('.docx'):
+            raise HTTPException(status_code=400, detail="Provide a .docx file or use files/archive/urls for batch")
         file_content = await file.read()
         result = await document_converter_service.convert_docx_to_rtf(file_content)
-
         if result.status != 200:
             raise HTTPException(status_code=result.status, detail=result.message)
-
         filename = file.filename.rsplit('.', 1)[0] + '.rtf'
-        return Response(
-            content=result.data,
-            media_type="application/rtf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
+        return Response(content=result.data, media_type="application/rtf", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -171,10 +188,13 @@ async def convert_docx_to_rtf(
 
 
 async def convert_txt_to_pdf(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
     page_size: str = Form("A4"),
     orientation: str = Form("portrait"),
     margin: int = Form(20),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None),
 ) -> Response:
     """
     Convert plain text file to PDF.
@@ -189,45 +209,38 @@ async def convert_txt_to_pdf(
         PDF file as response
     """
     try:
-        # Validate file type
-        if not file.filename.lower().endswith('.txt'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .txt files are supported"
-            )
+        # Batch
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            # For batch page settings, use defaults
+            result = await document_converter_service.batch_convert(items, target_format="pdf", allowed_sources=["txt"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_txt_to_pdf.zip"})
 
-        # Read file content
+        # Single
+        if file is None or not file.filename.lower().endswith('.txt'):
+            raise HTTPException(status_code=400, detail="Provide a .txt file or use files/archive/urls for batch")
         file_content = await file.read()
-
-        # Create conversion options
-        options = ConversionOptions(
-            page_size=page_size,
-            orientation=orientation,
-            margin=margin
-        )
-
-        # Convert document
-        result = await document_converter_service.convert_txt_to_pdf(
-            file_content,
-            options
-        )
-
+        options = ConversionOptions(page_size=page_size, orientation=orientation, margin=margin)
+        result = await document_converter_service.convert_txt_to_pdf(file_content, options)
         if result.status != 200:
-            raise HTTPException(
-                status_code=result.status,
-                detail=result.message
-            )
-
-        # Return PDF file
+            raise HTTPException(status_code=result.status, detail=result.message)
         filename = file.filename.rsplit('.', 1)[0] + '.pdf'
-        
-        return Response(
-            content=result.data,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
-        )
+        return Response(content=result.data, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -403,28 +416,41 @@ async def convert_txt_to_docx(
 
 
 async def convert_txt_to_rtf(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None),
 ) -> Response:
     """Convert TXT file to RTF."""
     try:
-        if not file.filename.lower().endswith('.txt'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .txt files are supported"
-            )
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            result = await document_converter_service.batch_convert(items, target_format="rtf", allowed_sources=["txt"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_txt_to_rtf.zip"})
 
+        if file is None or not file.filename.lower().endswith('.txt'):
+            raise HTTPException(status_code=400, detail="Provide a .txt file or use files/archive/urls for batch")
         file_content = await file.read()
         result = await document_converter_service.convert_txt_to_rtf(file_content)
-
         if result.status != 200:
             raise HTTPException(status_code=result.status, detail=result.message)
-
         filename = file.filename.rsplit('.', 1)[0] + '.rtf'
-        return Response(
-            content=result.data,
-            media_type="application/rtf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
+        return Response(content=result.data, media_type="application/rtf", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -436,7 +462,10 @@ async def convert_txt_to_rtf(
         )
 
 async def convert_pdf_to_docx(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None),
 ) -> Response:
     """
     Convert PDF file to DOCX.
@@ -448,35 +477,36 @@ async def convert_pdf_to_docx(
         DOCX file as response
     """
     try:
-        # Validate file type
-        if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .pdf files are supported"
-            )
+        # Batch
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            result = await document_converter_service.batch_convert(items, target_format="docx", allowed_sources=["pdf"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_pdf_to_docx.zip"})
 
-        # Read file content
+        # Single
+        if file is None or not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Provide a .pdf file or use files/archive/urls for batch")
         file_content = await file.read()
-
-        # Convert document
         result = await document_converter_service.convert_pdf_to_docx(file_content)
-
         if result.status != 200:
-            raise HTTPException(
-                status_code=result.status,
-                detail=result.message
-            )
-
-        # Return DOCX file
+            raise HTTPException(status_code=result.status, detail=result.message)
         filename = file.filename.rsplit('.', 1)[0] + '.docx'
-        
-        return Response(
-            content=result.data,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
-        )
+        return Response(content=result.data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -489,30 +519,43 @@ async def convert_pdf_to_docx(
 
 
 async def convert_pdf_to_rtf(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None),
 ) -> Response:
     """
     Convert PDF file to RTF.
     """
     try:
-        if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .pdf files are supported"
-            )
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            result = await document_converter_service.batch_convert(items, target_format="rtf", allowed_sources=["pdf"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_pdf_to_rtf.zip"})
 
+        if file is None or not file.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Provide a .pdf file or use files/archive/urls for batch")
         file_content = await file.read()
         result = await document_converter_service.convert_pdf_to_rtf(file_content)
-
         if result.status != 200:
             raise HTTPException(status_code=result.status, detail=result.message)
-
         filename = file.filename.rsplit('.', 1)[0] + '.rtf'
-        return Response(
-            content=result.data,
-            media_type="application/rtf",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
+        return Response(content=result.data, media_type="application/rtf", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -838,31 +881,41 @@ async def convert_md_to_pdf(
         )
 
 async def convert_md_to_docx(
-    file: UploadFile = File(...)
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None)
 ) -> Response:
     """Convert Markdown file to DOCX."""
     try:
-        if not file.filename.lower().endswith('.md'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .md files are supported"
-            )
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            result = await document_converter_service.batch_convert(items, target_format="docx", allowed_sources=["md"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_md_to_docx.zip"})
 
+        if file is None or not file.filename.lower().endswith('.md'):
+            raise HTTPException(status_code=400, detail="Provide a .md file or use files/archive/urls for batch")
         file_content = await file.read()
         result = await document_converter_service.convert_md_to_docx(file_content)
-
         if result.status != 200:
-            raise HTTPException(
-                status_code=result.status,
-                detail=result.message
-            )
-
+            raise HTTPException(status_code=result.status, detail=result.message)
         filename = file.filename.rsplit('.', 1)[0] + '.docx'
-        return Response(
-            content=result.data,
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
+        return Response(content=result.data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -874,31 +927,41 @@ async def convert_md_to_docx(
         )
 
 async def convert_md_to_txt(
-    file: UploadFile = File(...)
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None)
 ) -> Response:
     """Convert Markdown file to TXT."""
     try:
-        if not file.filename.lower().endswith('.md'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .md files are supported"
-            )
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            result = await document_converter_service.batch_convert(items, target_format="txt", allowed_sources=["md"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_md_to_txt.zip"})
 
+        if file is None or not file.filename.lower().endswith('.md'):
+            raise HTTPException(status_code=400, detail="Provide a .md file or use files/archive/urls for batch")
         file_content = await file.read()
         result = await document_converter_service.convert_md_to_txt(file_content)
-
         if result.status != 200:
-            raise HTTPException(
-                status_code=result.status,
-                detail=result.message
-            )
-
+            raise HTTPException(status_code=result.status, detail=result.message)
         filename = file.filename.rsplit('.', 1)[0] + '.txt'
-        return Response(
-            content=result.data,
-            media_type="text/plain",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
+        return Response(content=result.data, media_type="text/plain", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -910,31 +973,41 @@ async def convert_md_to_txt(
         )
 
 async def convert_md_to_html(
-    file: UploadFile = File(...)
+    file: UploadFile = File(None),
+    files: List[UploadFile] = File(None),
+    archive: UploadFile = File(None),
+    urls: Optional[str] = Form(None)
 ) -> Response:
     """Convert Markdown file to HTML."""
     try:
-        if not file.filename.lower().endswith('.md'):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only .md files are supported"
-            )
+        if (files and len(files) > 0) or archive is not None or urls:
+            items: list[tuple[str, bytes]] = []
+            if files:
+                for f in files:
+                    items.append((f.filename, await f.read()))
+            if archive is not None:
+                items.extend(await document_converter_service.extract_archive(archive.filename, await archive.read()))
+            if urls:
+                try:
+                    url_list = _json.loads(urls)
+                    if not isinstance(url_list, list):
+                        raise ValueError()
+                except Exception:
+                    raise HTTPException(status_code=400, detail="Invalid urls payload. Provide JSON array of strings.")
+                items.extend(await document_converter_service.download_urls(url_list))
+            result = await document_converter_service.batch_convert(items, target_format="html", allowed_sources=["md"])
+            if result.status != 200:
+                raise HTTPException(status_code=result.status, detail=result.message)
+            return Response(content=result.data, media_type="application/zip", headers={"Content-Disposition": "attachment; filename=batch_md_to_html.zip"})
 
+        if file is None or not file.filename.lower().endswith('.md'):
+            raise HTTPException(status_code=400, detail="Provide a .md file or use files/archive/urls for batch")
         file_content = await file.read()
         result = await document_converter_service.convert_md_to_html(file_content)
-
         if result.status != 200:
-            raise HTTPException(
-                status_code=result.status,
-                detail=result.message
-            )
-
+            raise HTTPException(status_code=result.status, detail=result.message)
         filename = file.filename.rsplit('.', 1)[0] + '.html'
-        return Response(
-            content=result.data,
-            media_type="text/html",
-            headers={"Content-Disposition": f"attachment; filename={filename}"}
-        )
+        return Response(content=result.data, media_type="text/html", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
     except HTTPException:
         raise
@@ -1093,7 +1166,7 @@ async def convert_rtf_to_docx(
 async def get_supported_conversions():
     """
     Get list of supported document conversions.
-
+    
     Returns:
         Dictionary of supported conversions
     """

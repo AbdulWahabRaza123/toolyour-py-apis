@@ -30,6 +30,7 @@ kindlegen==1.2
 # Audio/Video processing
 moviepy==1.0.3
 pydub==0.25.1
+pdf2docx==0.5.6
 
 # Archive handling
 py7zr==0.20.8
